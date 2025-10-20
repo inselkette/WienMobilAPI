@@ -24,7 +24,7 @@ stations = data["data"]["stations"]
 # fetch time in fetched_at
 fetched_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
-# 
+# open file with all the data extract only needed data
 with open(OUT_FILE, "a", encoding="utf-8") as f:
     for st in stations:
         row = {

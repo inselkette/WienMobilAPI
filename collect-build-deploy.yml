@@ -1,0 +1,87 @@
+name: Collect, Visualize, and Publish 
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */2 * * *"  # every 2 hours 
+
+permissions:
+  contents: write     
+  pages: write        
+  id-token: write     
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  collect-build-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install only what we need for two scripts
+          python -m pip install requests pandas matplotlib
+
+      - name: Run fetcher (append JSONL)
+        run: |
+          python WienMobilFetchProcessStore.py
+
+      - name: Run visualizer (create PNG)
+        run: |
+          python Visualization.py
+
+      - name: Commit updated data & image (if changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/bikeshare.jsonl data/total_bikes_over_time.png || true
+          if ! git diff --cached --quiet; then
+            git commit -m "Update bikeshare data & chart [skip ci]"
+            git push
+          else
+            echo "Nothing to commit."
+          fi
+
+      # Build website
+      - name: Build static site folder
+        run: |
+          mkdir -p site
+          cp data/total_bikes_over_time.png site/
+          cat > site/index.html << 'HTML'
+          <!doctype html>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>WienMobil Bikes — Total over time</title>
+          <style>
+            body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 1rem; }
+            figure { max-width: 1100px; margin: 0 auto; }
+            img { width: 100%; height: auto; border: 1px solid #ddd; }
+            .meta { color:#555; font-size:.9rem; margin:.5rem 0 1rem; }
+          </style>
+          <h1>WienMobil Bikes — Total bikes available</h1>
+          <p class="meta">Updated every ~2 hours by GitHub Actions. Times are UTC.</p>
+          <figure>
+            <img src="total_bikes_over_time.png" alt="Total bikes over time">
+            <figcaption>Simple city-wide total per timestamp (hourly snapshots).</figcaption>
+          </figure>
+          HTML
+
+      # Publish site
+      - name: Upload artifact for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
