@@ -1,87 +1,117 @@
-name: Collect, Visualize, and Publish 
+# define the name of the workflow
+name: Build and publish
 
+# define the events that trigger the workflow
 on:
+  # when code is pushed to the main branch
+  push:
+    branches:
+      - main
+  # allows manual triggering of the workflow from the Actions tab (nice for testing)
   workflow_dispatch:
+  # allows triggering the workflow via repository dispatch (from other workflows or API)
+  repository_dispatch:
+  # schedule the workflow; here: every 2 hours (UTC)
   schedule:
-    - cron: "0 */2 * * *"  # every 2 hours 
+    - cron: "0 */2 * * *"
 
-permissions:
-  contents: write     
-  pages: write        
-  id-token: write     
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
+# a list of jobs to be executed as part of the workflow
 jobs:
-  collect-build-deploy:
+  # a job with the key 'build_pages'
+  build_pages:
+    # define the name of the job
+    name: important job
+    # specify the type of runner to execute the job on
     runs-on: ubuntu-latest
 
+    # environment variables available to all steps (optional)
+    env:
+      REPO_NAME: ${{ github.repository }}
+
+    # permissions this job needs
+    permissions:
+      contents: write   # commit data/images back to the repo
+      pages: write      # deploy to GitHub Pages
+      id-token: write   # OIDC auth for deploy-pages
+
+    # we’ll deploy to the built-in github-pages environment
+    environment:
+      name: github-pages
+
+    # steps are executed sequentially
     steps:
-      - name: Checkout
+      # checkout your repository content
+      - name: Perform Checkout
         uses: actions/checkout@v4
 
+      # (optional but recommended) configure Pages for this job
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      # set up Python (your scripts use Python)
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - name: Install dependencies
+      # install only what is needed by your two scripts
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          # Install only what we need for two scripts
           python -m pip install requests pandas matplotlib
 
-      - name: Run fetcher (append JSONL)
+      # run your fetcher: appends to data/bikeshare.jsonl
+      - name: Fetch and append data
         run: |
           python WienMobilFetchProcessStore.py
 
-      - name: Run visualizer (create PNG)
+      # auto-commit any data changes (so your repo keeps the full history)
+      - name: Commit updated data (if changed)
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update bikeshare data [skip ci]"
+          file_pattern: data/bikeshare.jsonl
+
+      # run your visualizer: generates data/total_bikes_over_time.png
+      - name: Build visualization
         run: |
           python Visualization.py
 
-      - name: Commit updated data & image (if changed)
+      # prepare a super simple site into ./html (an image counts as a website!)
+      - name: Prepare static site
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/bikeshare.jsonl data/total_bikes_over_time.png || true
-          if ! git diff --cached --quiet; then
-            git commit -m "Update bikeshare data & chart [skip ci]"
-            git push
-          else
-            echo "Nothing to commit."
-          fi
-
-      # Build website
-      - name: Build static site folder
-        run: |
-          mkdir -p site
-          cp data/total_bikes_over_time.png site/
-          cat > site/index.html << 'HTML'
+          mkdir -p html
+          cp data/total_bikes_over_time.png html/
+          cat > html/index.html << 'HTML'
           <!doctype html>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width,initial-scale=1">
           <title>WienMobil Bikes — Total over time</title>
           <style>
-            body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 1rem; }
+            body { font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding: 1rem; }
             figure { max-width: 1100px; margin: 0 auto; }
             img { width: 100%; height: auto; border: 1px solid #ddd; }
             .meta { color:#555; font-size:.9rem; margin:.5rem 0 1rem; }
           </style>
           <h1>WienMobil Bikes — Total bikes available</h1>
-          <p class="meta">Updated every ~2 hours by GitHub Actions. Times are UTC.</p>
+          <p class="meta">Updated ~every 2 hours by GitHub Actions. Times shown on the chart are Europe/Vienna.</p>
           <figure>
             <img src="total_bikes_over_time.png" alt="Total bikes over time">
-            <figcaption>Simple city-wide total per timestamp (hourly snapshots).</figcaption>
+            <figcaption>City-wide total per snapshot (hourly).</figcaption>
           </figure>
           HTML
+          echo "Site contents:"
+          ls -la html
 
-      # Publish site
-      - name: Upload artifact for Pages
+      # upload the ./html folder as the Pages artifact
+      - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: ./html
 
+      # deploy the uploaded artifact to GitHub Pages
       - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
